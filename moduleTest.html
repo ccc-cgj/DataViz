@@ -1,0 +1,239 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<title>Test</title>
+	<style>
+	body{margin: 0px;}
+	</style>
+
+
+<!-- Custom shaders for particle effects -->
+<script type="x-shader/x-vertex" id="vertexshader">
+uniform float time;
+attribute vec3 customColor;
+varying vec3 vColor;
+void main() 
+{
+	vColor = customColor; // set color associated to vertex; use later in fragment shader.
+
+	vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+
+	// option (1): draw particles at constant size on screen
+	// gl_PointSize = size;
+    // option (2): scale particles as objects in 3D space
+	gl_PointSize = 40.0 * ( 300.0 / length( mvPosition.xyz ) );
+	gl_Position = projectionMatrix * mvPosition;
+}
+</script>
+
+<script type="x-shader/x-fragment" id="fragmentshader">
+uniform sampler2D texture;
+varying vec3 vColor; // colors associated to vertices, assigned by vertex shader
+void main() 
+{
+	// calculates a color for the particle
+	gl_FragColor = vec4( vColor, 1.0 );
+	// sets a white particle texture to desired color
+	gl_FragColor = gl_FragColor * texture2D( texture, gl_PointCoord );
+}
+</script>
+<!-- end of custom shaders -->
+
+</head>
+<body>
+<!-- Load Matrix Module START -->
+<script src="js/lib/matrix/config/Coefficient.js"></script>
+
+<script src="js/lib/matrix/object/Post.js"></script>
+<script src="js/lib/matrix/object/User.js"></script>
+
+<script src="js/lib/matrix/quantity/Mass.js"></script>
+<script src="js/lib/matrix/quantity/Position.js"></script>
+<script src="js/lib/matrix/quantity/Velocity.js"></script>
+<script src="js/lib/matrix/universe/Particle.js"></script>
+<script src="js/lib/matrix/quantity/Distance.js"></script>
+
+<script src="js/lib/matrix/laws/laws.js"></script>
+
+<script src="js/lib/matrix/Main.js"></script>
+<!-- Load Matrix Module END -->
+
+<!-- Load 3.js Module START -->
+<script src="js/lib/3d/three.min.js"></script>
+<script src="js/lib/3d/Detector.js"></script>
+<script src="js/lib/3d/Stats.js"></script>
+<script src="js/lib/3d/OrbitControls.js"></script>
+<script src="js/lib/3d/THREEx.KeyboardState.js"></script>
+<script src="js/lib/3d/THREEx.FullScreen.js"></script>
+<script src="js/lib/3d/THREEx.WindowResize.js"></script>
+<!-- Load 3.js Module END -->
+
+<div id="ThreeJS" style="position: absolute; left:0px; top:0px"></div>
+<script>
+// standard global variables
+var container, scene, camera, renderer, controls, stats;
+var keyboard = new THREEx.KeyboardState();
+var clock = new THREE.Clock();
+// custom global variables
+var cube;
+
+// Module for Matrix computing:
+var lstParticle = constructParticles();
+var lstPosition = getPositionListFromParticleList(lstParticle);
+
+function position2Vector(position){
+	return new THREE.Vector3(position.x, position.y, position.z);
+}
+
+init();
+animate();
+
+// FUNCTIONS 		
+function init() 
+{
+	// SCENE
+	scene = new THREE.Scene();
+	// CAMERA
+	var SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
+	var VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.1, FAR = 20000;
+	camera = new THREE.PerspectiveCamera( VIEW_ANGLE, ASPECT, NEAR, FAR);
+	scene.add(camera);
+	camera.position.set(0,200,400);
+	camera.lookAt(scene.position);	
+	// RENDERER
+	if ( Detector.webgl )
+		renderer = new THREE.WebGLRenderer( {antialias:true} );
+	else
+		renderer = new THREE.CanvasRenderer(); 
+	renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+	container = document.getElementById( 'ThreeJS' );
+	container.appendChild( renderer.domElement );
+	// EVENTS
+	THREEx.WindowResize(renderer, camera);
+	THREEx.FullScreen.bindKey({ charCode : 'm'.charCodeAt(0) });
+	// CONTROLS
+	controls = new THREE.OrbitControls( camera, renderer.domElement );
+	// STATS
+	stats = new Stats();
+	stats.domElement.style.position = 'absolute';
+	stats.domElement.style.bottom = '0px';
+	stats.domElement.style.zIndex = 100;
+	container.appendChild( stats.domElement );
+	// LIGHT
+	var light = new THREE.PointLight(0xffffff);
+	light.position.set(0,250,0);
+	scene.add(light);
+
+	// FLOOR
+	var floorTexture = new THREE.ImageUtils.loadTexture( 'images/checkerboard.jpg' );
+	floorTexture.wrapS = floorTexture.wrapT = THREE.RepeatWrapping; 
+	floorTexture.repeat.set( 10, 10 );
+	var floorMaterial = new THREE.MeshBasicMaterial( { map: floorTexture, side: THREE.DoubleSide } );
+	var floorGeometry = new THREE.PlaneGeometry(1000, 1000, 100, 100);
+	var floor = new THREE.Mesh(floorGeometry, floorMaterial);
+	floor.position.y = -0.5;
+	floor.rotation.x = Math.PI / 2;
+	scene.add(floor);
+	// SKYBOX/FOG
+	var skyBoxGeometry = new THREE.CubeGeometry( 10000, 10000, 10000 );
+	var skyBoxMaterial = new THREE.MeshBasicMaterial( { color: 0x9999ff, side: THREE.BackSide } );
+	var skyBox = new THREE.Mesh( skyBoxGeometry, skyBoxMaterial );
+    skyBox.flipSided = true; // render faces from inside of the cube, instead of from outside (default).
+	// scene.add(skyBox);
+	scene.fog = new THREE.FogExp2( 0x9999ff, 0.00025 );
+	
+	////////////
+	// CUSTOM //
+	////////////
+	
+	
+	this.particleGeometry = new THREE.Geometry();
+	
+	for (var i = 0; i < lstPosition.length; i++){
+		var position = lstPosition[i];
+		particleGeometry.vertices.push( position2Vector(position) );
+		// particleGeometry.vertices.push( new THREE.Vector3(0,0,0) );
+	}
+	
+	var discTexture = THREE.ImageUtils.loadTexture( 'images/disc.png' );
+	
+	// properties that may vary from particle to particle. 
+	// these values can only be accessed in vertex shaders! 
+	//  (pass info to fragment shader via vColor.)
+	this.attributes = 
+	{
+		customColor:	 { type: 'c',  value: [] },
+		customOffset:	 { type: 'f',  value: [] },
+	};
+	
+	var particleCount = particleGeometry.vertices.length
+	for( var v = 0; v < particleCount; v++ ) 
+	{
+		attributes.customColor.value[ v ] = new THREE.Color().setHSL( 1 - v / particleCount, 1.0, 0.5 );
+		attributes.customOffset.value[ v ] = 6.282 * (v / particleCount); // not really used in shaders, move elsewhere
+	}
+	
+	// values that are constant for all particles during a draw call
+	this.uniforms = 
+	{
+		time:      { type: "f", value: 1.0 },
+		texture:   { type: "t", value: discTexture },
+	};
+
+	var shaderMaterial = new THREE.ShaderMaterial( 
+	{
+		uniforms: 		uniforms,
+		attributes:     attributes,
+		vertexShader:   document.getElementById( 'vertexshader' ).textContent,
+		fragmentShader: document.getElementById( 'fragmentshader' ).textContent,
+		transparent: true, // alphaTest: 0.5,  // if having transparency issues, try including: alphaTest: 0.5, 
+		// blending: THREE.AdditiveBlending, depthTest: false,
+		// I guess you don't need to do a depth test if you are alpha blending
+		// 
+	});
+
+	var particleCube = new THREE.ParticleSystem( particleGeometry, shaderMaterial );
+	particleCube.position.set(0, 85, 0);
+	particleCube.dynamic = true;
+	// in order for transparency to work correctly, we need sortParticles = true.
+	//  but this won't work if we calculate positions in vertex shader,
+	//  so positions need to be calculated in the update function,
+	//  and set in the geometry.vertices array
+	particleCube.sortParticles = true;
+	scene.add( particleCube );
+
+}
+
+function animate() 
+{
+    requestAnimationFrame( animate );
+	render();		
+	update();
+}
+
+function update(){
+	
+	controls.update();
+	stats.update();
+
+	// update for matrix
+	for ( var i = 0; i < 40; i++){
+
+		lstParticle = updateAllMotion(lstParticle);
+		var positionLst = getPositionListFromParticleList(lstParticle);
+	}
+	// update for matrix
+	
+	for( var v = 0; v < particleGeometry.vertices.length; v++ ) {		
+		particleGeometry.vertices[v] = position2Vector( positionLst[v] );
+	}
+
+}
+
+function render() 
+{
+	renderer.render( scene, camera );
+}
+</script>
+</body>
+</html>
