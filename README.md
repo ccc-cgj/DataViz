@@ -20,6 +20,10 @@ In this version, I assume there are only 3 possible interests.
 In actual situation, there would be more.
 If you want to change that, be careful that you also need to change the gravitational law to let it fit in the higher dimensional space.
 
+Notes
+---------
+The program should be executed in a server. Otherwise, you will receive error message of prohibited Cross-Domain request from JavaScript engine.
+
 Open Source
 --------
 Thanks the examples of Three.js, I am able to write the graphics part.
